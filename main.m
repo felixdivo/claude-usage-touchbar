@@ -29,6 +29,13 @@ extern void DFRSystemModalShowsCloseBoxWhenFrontMost(BOOL show);
 
 static NSTouchBarItemIdentifier const kSceneID = @"local.claude-touchbar.scene";
 static NSTouchBarItemIdentifier const kEscID   = @"local.claude-touchbar.esc";
+// Collapsing does not dismiss the presented bar outright — tried that first,
+// via the undocumented systemTrayItemIdentifier param, hoping the system would
+// leave a Control Strip icon behind on its own. On real hardware it leaves
+// nothing tappable at all, so instead we swap in a second, tiny bar (kMiniID
+// below) that is itself the reopen button. Something is always presented.
+static NSTouchBarItemIdentifier const kCloseID = @"local.claude-touchbar.close";
+static NSTouchBarItemIdentifier const kMiniID  = @"local.claude-touchbar.mini";
 static NSString *const kScript = @"~/bin/claude-touchbar.sh --raw";
 
 // Measured with `make ruler`, which draws ticks at fixed coordinates: the last
@@ -483,7 +490,12 @@ static void DrawGrid(const unsigned char *g, NSPoint origin, CGFloat px,
             NSRectFill(NSMakeRect(p.x + dx, headY + dy - 2, sz, sz * 1.35));
         }
     } else if (self.act == ActWalk) {
-        DrawGrid(WalkFrame(base, (int)(self.phase * 2.0)), feet, px, (self.dir < 0), body);
+        // Animation off leaves phase at 0 forever, but WalkFrame(base, 0) is
+        // still one specific mid-stride leg pose, not a neutral stance — draw
+        // the plain base grid instead so he actually reads as standing still.
+        const unsigned char *frame = self.animationEnabled
+            ? WalkFrame(base, (int)(self.phase * 2.0)) : base;
+        DrawGrid(frame, feet, px, (self.dir < 0), body);
     } else if (self.act == ActJuggle) {
         DrawGrid(base, feet, px, (self.dir < 0), body);
         // The ball, sitting above his head.
@@ -802,6 +814,7 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 @property (nonatomic) BOOL rulerMode;
 @property (nonatomic) BOOL sweatMode;
 @property (nonatomic, strong) NSTouchBar *bar;
+@property (nonatomic, strong) NSTouchBar *miniBar;   // just the reopen button
 @property (nonatomic, strong) PetView *pet;
 @property (nonatomic, strong) NSTimer *frameTimer;
 @property (nonatomic, strong) dispatch_queue_t shell;
@@ -809,6 +822,11 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 @property (nonatomic) NSTimeInterval lastFrame;
 @property (nonatomic) NSTimeInterval lastPoll;
 @property (nonatomic) BOOL polling, asleep;
+// User tapped the close button. Distinct from `asleep`: a locked screen is
+// temporary and self-clearing, this is a deliberate choice that must survive
+// every future app-switch until the mini bar's reopen button (kMiniID) brings
+// the full widget back.
+@property (nonatomic) BOOL collapsed;
 @end
 
 @implementation AppDelegate
@@ -840,9 +858,14 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 
     self.bar = [NSTouchBar new];
     self.bar.delegate = self;
-    self.bar.defaultItemIdentifiers = @[kSceneID];
+    self.bar.defaultItemIdentifiers = @[kSceneID, kCloseID];
     // Keep Esc working — a presented bar otherwise covers the system one.
     self.bar.escapeKeyReplacementItemIdentifier = kEscID;
+
+    self.miniBar = [NSTouchBar new];
+    self.miniBar.delegate = self;
+    self.miniBar.defaultItemIdentifiers = @[kMiniID];
+    self.miniBar.escapeKeyReplacementItemIdentifier = kEscID;
 
     [self present];
 
@@ -872,9 +895,16 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
     [self poll];
 }
 
+// `present` is also the re-assertion path called on every app switch, so it
+// has to keep presenting whichever bar matches `collapsed` — otherwise the
+// first app switch after a close would silently expand the widget again.
 - (void)present {
-    [NSTouchBar presentSystemModalTouchBar:self.bar placement:0 systemTrayItemIdentifier:nil];
+    NSTouchBar *target = self.collapsed ? self.miniBar : self.bar;
+    [NSTouchBar presentSystemModalTouchBar:target placement:0 systemTrayItemIdentifier:nil];
 }
+
+- (void)collapse:(id)sender { self.collapsed = YES; [self present]; }
+- (void)reopen:(id)sender   { self.collapsed = NO;  [self present]; }
 
 - (void)sleep { self.asleep = YES; }
 - (void)wake  { self.asleep = NO; [self present]; }
@@ -896,6 +926,16 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
     if ([identifier isEqualToString:kEscID]) {
         NSCustomTouchBarItem *it = [[NSCustomTouchBarItem alloc] initWithIdentifier:identifier];
         it.view = [NSButton buttonWithTitle:@"esc" target:self action:@selector(sendEscape:)];
+        return it;
+    }
+    if ([identifier isEqualToString:kCloseID]) {
+        NSCustomTouchBarItem *it = [[NSCustomTouchBarItem alloc] initWithIdentifier:identifier];
+        it.view = [NSButton buttonWithTitle:@"⌄" target:self action:@selector(collapse:)];
+        return it;
+    }
+    if ([identifier isEqualToString:kMiniID]) {
+        NSCustomTouchBarItem *it = [[NSCustomTouchBarItem alloc] initWithIdentifier:identifier];
+        it.view = [NSButton buttonWithTitle:@"👻" target:self action:@selector(reopen:)];
         return it;
     }
     return nil;
@@ -967,7 +1007,11 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note {
+    // Only one of these is ever actually presented, but dismissing whichever
+    // one isn't is a harmless no-op, and this way termination doesn't need to
+    // track which state we were in.
     [NSTouchBar dismissSystemModalTouchBar:self.bar];
+    if (self.miniBar) [NSTouchBar dismissSystemModalTouchBar:self.miniBar];
     if (self.activity) [NSProcessInfo.processInfo endActivity:self.activity];
 }
 
