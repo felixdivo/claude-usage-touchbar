@@ -32,10 +32,10 @@ static NSTouchBarItemIdentifier const kEscID   = @"local.claude-touchbar.esc";
 static NSString *const kScript = @"~/bin/claude-touchbar.sh --raw";
 
 // Measured with `make ruler`, which draws ticks at fixed coordinates: the last
-// legible label is 600, so that is the usable width beside the Control Strip.
-// The window reports 685pt, but part of that is never presented — trusting the
-// window figure clipped the third readout cell clean off.
-static CGFloat const kSceneW = 600.0;
+// legible label is 600, so 600 is the ceiling the Control Strip allows. We
+// deliberately draw narrower than that ceiling, to leave visible Control Strip
+// space beside the widget rather than claiming every point on offer.
+static CGFloat const kSceneW = 480.0;
 static CGFloat const kSceneH = 30.0;
 static double  const kFPS    = 15.0;    // both reference pet apps land at 14-18
 
@@ -112,6 +112,9 @@ static int ClipForMood(Mood m, int previous) {
 @property (nonatomic, copy) NSString *state;   // ok | stale | expired | none
 @property (nonatomic) CGFloat x, dir, phase;
 @property (nonatomic) BOOL haveData;
+// `defaults write local.claude-touchbar NoAnimation -bool YES` — for a readout
+// with no pacing, clips, or juggling: he just stands and reports the numbers.
+@property (nonatomic) BOOL animationEnabled;
 @property (nonatomic) Act act;
 @property (nonatomic) NSInteger clip;           // frame index within the clip
 @property (nonatomic) NSInteger clipIdx;        // which clip in kClawdClips
@@ -129,6 +132,7 @@ static int ClipForMood(Mood m, int previous) {
     if ((self = [super initWithFrame:f])) {
         _x = 40; _dir = 1; _p5 = 0; _p7 = 0; _resetMin = -1;
         _act = ActWalk;
+        _animationEnabled = YES;
         _nextActAt = 4.0;
         _lastClipIdx = -1;
         // Without this the view gets direct touches only intermittently.
@@ -204,6 +208,14 @@ static int ClipForMood(Mood m, int previous) {
 
 - (void)advance:(NSTimeInterval)dt {
     Mood m = MoodForUsage(self.p5);
+
+    // Disabled: no pacing, no clips, no juggling. Dragging still moves him —
+    // that is the user's own hand doing it, not idle animation — but nothing
+    // plays on its own.
+    if (!self.animationEnabled && !self.dragging && fabs(self.throwVX) <= 1.0) {
+        self.needsDisplay = YES;
+        return;
+    }
 
     if (self.dragging) {
         // Held: legs scrabble, body shakes. A limp sprite following a finger
@@ -583,15 +595,15 @@ static void DrawRight(NSString *s, CGFloat rightEdge, CGFloat y, NSDictionary *a
     // Thresholds are visible on the bar itself (ticks at 50 and 90), so a
     // change of colour lands where the user can see why, and ">= 90" also
     // prints "!" so the alarm never depends on colour vision alone.
-    // Picked on the Touch Bar itself via `--palette`, not from renders. Claude
-    // Code's own #B1B9F9 was the starting point and lost: hue 233 reads as
-    // lavender and L84 washes out on a 30pt strip you glance at. A panel this
-    // dim wants more saturation and less lightness than a terminal does.
+    // Muted on purpose: this sits on a strip you glance at dozens of times a
+    // day, not a dashboard you study, so the bars should read as data rather
+    // than pull the eye. Each is the same hue as the original pick, desaturated
+    // and darkened so only the alarm tier still stands out.
     BOOL alarm = (pct >= 90);
     NSColor *ink;
-    if (alarm)          ink = [NSColor colorWithSRGBRed:0.902 green:0.208 blue:0.180 alpha:1.0];  // #E6352E
-    else if (pct >= 50) ink = [NSColor colorWithSRGBRed:0.949 green:0.706 blue:0.161 alpha:1.0];  // #F2B429
-    else                ink = [NSColor colorWithSRGBRed:0.173 green:0.533 blue:0.945 alpha:1.0];  // #2C88F1
+    if (alarm)          ink = [NSColor colorWithSRGBRed:0.710 green:0.337 blue:0.306 alpha:1.0];  // #B5564E
+    else if (pct >= 50) ink = [NSColor colorWithSRGBRed:0.725 green:0.604 blue:0.357 alpha:1.0];  // #B99A5B
+    else                ink = [NSColor colorWithSRGBRed:0.431 green:0.565 blue:0.722 alpha:1.0];  // #6E90B8
 
     NSDictionary *lb = @{ NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold],
                           NSForegroundColorAttributeName: [NSColor colorWithWhite:1.0 alpha:0.70 * dim] };
@@ -824,6 +836,7 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
     }
 
     self.pet = [[PetView alloc] initWithFrame:NSMakeRect(0, 0, kSceneW, kSceneH)];
+    self.pet.animationEnabled = ![NSUserDefaults.standardUserDefaults boolForKey:@"NoAnimation"];
 
     self.bar = [NSTouchBar new];
     self.bar.delegate = self;

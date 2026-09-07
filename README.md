@@ -111,7 +111,20 @@ re-run `make install-agent` after moving it.
 
 It restarts on a crash but not when you quit it yourself, and it does not load
 outside a GUI session. Removing it leaves nothing behind: no daemon, no
-preferences, no keychain entry of its own.
+keychain entry of its own — the only local state is the optional preference
+below, if you ever set it.
+
+## Configuration
+
+```bash
+defaults write local.claude-touchbar NoAnimation -bool YES   # stop pacing, clips, juggling
+defaults delete local.claude-touchbar NoAnimation             # back to the default
+```
+
+Takes effect on the next launch (`make run`, or quit and let the login agent
+restart it). With it set, Clawd stands still and just reports the numbers —
+you can still drag him along the bar by hand, since that is your own doing,
+not idle animation.
 
 ## How it fits together
 
