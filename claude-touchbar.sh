@@ -4,7 +4,7 @@
 # Prints: "<5h%> <7d%> <resetMin> <ageSec> <state>"
 #   state: ok      — fresh reading from the API
 #          stale   — API unreachable, showing the last good numbers
-#          expired — the OAuth token has expired; run `claude -p hi` to refresh
+#          expired — the OAuth token has expired; a refresh has been triggered
 #          none    — never had a reading
 #
 # The caller MUST distinguish these: an expired token used to look identical to
@@ -17,6 +17,31 @@ set -uo pipefail
 
 CACHE=/tmp/.claude-usage-$UID          # "5h 7d resetMin scopedPct scopedName epoch"
 TTL=60
+
+# An expired token fixes itself the moment the `claude` CLI runs at all — it
+# holds the refresh token this script deliberately never reads (see
+# SECURITY.md). So instead of telling you to run `claude -p hi` by hand, fire
+# it off ourselves: smallest model, lowest effort, no MCP servers, no session
+# saved — a few cents' worth of "hi" at most, and often free-tier haiku usage
+# doesn't even touch the limits this widget is showing you.
+REFRESH_LOCK=/tmp/.claude-touchbar-refresh-$UID
+REFRESH_COOLDOWN=180                   # don't relaunch more often than this
+
+try_refresh() {
+  command -v claude >/dev/null 2>&1 || return
+  local last=$REFRESH_COOLDOWN
+  if [ -f "$REFRESH_LOCK" ]; then
+    last=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
+  fi
+  [ "$last" -lt "$REFRESH_COOLDOWN" ] && return
+  : > "$REFRESH_LOCK"
+  # Backgrounded and redirected to /dev/null so it never inherits this
+  # script's stdout — that pipe is what NSTask reads to end-of-file, and an
+  # inherited fd would make the Touch Bar poll block on this child too.
+  ( claude --model haiku --effort low --strict-mcp-config \
+      --no-session-persistence --max-budget-usd 0.02 -p hi \
+      >/dev/null 2>&1 & )
+}
 
 # /usr/bin/python3 ships with the Command Line Tools, which this project already
 # requires to build — so there is no runtime dependency to install. An earlier
@@ -47,6 +72,7 @@ except Exception: print("1")')
 
   if [ "$expired" = "1" ]; then
     state=expired
+    try_refresh
   else
     tok=$(printf '%s' "$cred" | "$PY" -c 'import json,sys
 try: sys.stdout.write(json.load(sys.stdin)["claudeAiOauth"]["accessToken"])
@@ -62,6 +88,7 @@ except Exception: pass')
     code=$(printf '%s' "$resp" | tail -1)
     if [ "$code" = "401" ] || [ "$code" = "403" ]; then
       state=expired
+      try_refresh
     elif [ "$code" = "200" ]; then
       # SCALE: the API reports whole percentages (0-100) directly, and
       # limits[].percent confirms it. A previous version guessed the scale with
@@ -124,7 +151,7 @@ case "${1:-}" in
   --raw) printf '%s %s %s %s %s %s %s\n' "$P5" "$P7" "$RESET" "$AGE" "$state" "${SP:--1}" "${SN:--}" ;;
   *)
      case "$state" in
-       expired) printf 'token expired — run: claude -p hi   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
+       expired) printf 'token expired — refreshing…   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
        stale)   printf '5h %s%%  7d %s%%   (stale %dm)\n' "$P5" "$P7" $((AGE/60)) ;;
        *)       printf '5h %s%%  7d %s%%' "$P5" "$P7"
                 [ "${SP:--1}" -gt 0 ] && printf '  %s %s%%' "${SN:--}" "$SP"

@@ -549,7 +549,7 @@ static void DrawRight(NSString *s, CGFloat rightEdge, CGFloat y, NSDictionary *a
         NSDictionary *s = @{ NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular],
                              NSForegroundColorAttributeName: [NSColor colorWithWhite:1.0 alpha:0.55] };
         [@"token expired" drawAtPoint:NSMakePoint(READ_X, h - 16) withAttributes:t];
-        [@"claude -p hi" drawAtPoint:NSMakePoint(READ_X, 3) withAttributes:s];
+        [@"refreshing…" drawAtPoint:NSMakePoint(READ_X, 3) withAttributes:s];
         return;
     }
 

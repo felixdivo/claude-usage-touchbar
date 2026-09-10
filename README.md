@@ -83,8 +83,10 @@ Check the script works on its own first:
 # 5h 26%  7d 91%   reset 2h05
 ```
 
-If it says `token expired`, run `claude -p hi` once — the CLI refreshes the
-token for you. No re-login, no prompt.
+If it says `token expired`, that's expected the first time — the script
+already fired off `claude --model haiku -p hi` in the background to refresh
+it (throttled to once every 3 minutes), so it should clear itself within a
+few seconds. No re-login, no prompt, nothing for you to run by hand.
 
 ### Why the poses are not in this repository
 

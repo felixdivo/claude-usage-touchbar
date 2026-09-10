@@ -90,6 +90,30 @@ values:
 Percentages and a timestamp. No token, no identifier, nothing about you.
 Delete it whenever you like; it is rebuilt within a minute.
 
+## Auto-refreshing an expired token
+
+When the token is expired, `claude-touchbar.sh` runs:
+
+```sh
+claude --model haiku --effort low --strict-mcp-config \
+  --no-session-persistence --max-budget-usd 0.02 -p hi
+```
+
+in the background, throttled to once every 180 seconds by an empty marker
+file at `/tmp/.claude-touchbar-refresh-$UID` (mode inherited from `umask`,
+contents just a timestamp via mtime — nothing to read from it).
+
+This is the same `claude` binary you already run and trust, not code from
+this project reaching out on its own. It is launched, not linked: this
+script has no more access to its internals than you do typing the command
+yourself. The flags only trim what that session does — cheapest model,
+lowest effort, no MCP servers, no session saved to disk, a hard spend cap —
+they grant no new access. The CLI reads `refreshToken` to do this (this
+script still never does), and makes whatever network calls the `claude` CLI
+itself makes to authenticate; auditing *that* is Anthropic's CLI, not this
+project, and outside this document's scope. `api.anthropic.com` remains the
+only host `claude-touchbar.sh`'s own code (the `curl` call above) contacts.
+
 ## Private API
 
 The app calls `+[NSTouchBar presentSystemModalTouchBar:placement:systemTrayItemIdentifier:]`
