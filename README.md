@@ -88,6 +88,11 @@ already fired off `claude --model haiku -p hi` in the background to refresh
 it (throttled to once every 3 minutes), so it should clear itself within a
 few seconds. No re-login, no prompt, nothing for you to run by hand.
 
+If the widget shows `claude -p hi` instead of `refreshing…`, it could not
+find the CLI. launchd does not put Homebrew on `PATH`, so the script checks
+the standard install locations directly; a `claude` somewhere else needs a
+symlink into one of them (e.g. `~/.local/bin`).
+
 ### Why the poses are not in this repository
 
 Clawd is Anthropic's mascot; the name and the character are theirs. The pose

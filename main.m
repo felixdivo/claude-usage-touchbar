@@ -119,6 +119,7 @@ static int ClipForMood(Mood m, int previous) {
 @property (nonatomic, copy) NSString *state;   // ok | stale | expired | none
 @property (nonatomic) CGFloat x, dir, phase;
 @property (nonatomic) BOOL haveData;
+@property (nonatomic) BOOL autoRefresh;   // script can relaunch the CLI itself
 // `defaults write local.claude-touchbar NoAnimation -bool YES` — for a readout
 // with no pacing, clips, or juggling: he just stands and reports the numbers.
 @property (nonatomic) BOOL animationEnabled;
@@ -549,7 +550,8 @@ static void DrawRight(NSString *s, CGFloat rightEdge, CGFloat y, NSDictionary *a
         NSDictionary *s = @{ NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular],
                              NSForegroundColorAttributeName: [NSColor colorWithWhite:1.0 alpha:0.55] };
         [@"token expired" drawAtPoint:NSMakePoint(READ_X, h - 16) withAttributes:t];
-        [@"refreshing…" drawAtPoint:NSMakePoint(READ_X, 3) withAttributes:s];
+        [(self.autoRefresh ? @"refreshing…" : @"claude -p hi")
+            drawAtPoint:NSMakePoint(READ_X, 3) withAttributes:s];
         return;
     }
 
@@ -999,6 +1001,9 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
                 // noise on a 30pt strip.
                 self.pet.scopedPct  = (parts.count >= 6) ? parts[5].intValue : -1;
                 self.pet.scopedName = (parts.count >= 7) ? parts[6] : @"";
+                // Only claim a refresh is under way if the script actually
+                // launched one — it cannot when no `claude` binary exists.
+                self.pet.autoRefresh = (parts.count >= 8) && [parts[7] isEqualToString:@"auto"];
                 self.pet.haveData = ![parts[4] isEqualToString:@"none"];
             }
             self.polling = NO;

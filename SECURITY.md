@@ -99,6 +99,14 @@ claude --model haiku --effort low --strict-mcp-config \
   --no-session-persistence --max-budget-usd 0.02 -p hi
 ```
 
+launchd starts the app with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, which does
+not include Homebrew, so the binary is located by checking `command -v` and
+then a fixed list of standard install paths (`/opt/homebrew/bin`,
+`/usr/local/bin`, `~/.local/bin`, `~/.claude/local`, `~/bin`). Only an
+executable at one of those paths is ever run; nothing is downloaded, and no
+directory is searched recursively. If none exists, no subprocess is started
+and the widget says `claude -p hi` rather than claiming to refresh.
+
 in the background, throttled to once every 180 seconds by an empty marker
 file at `/tmp/.claude-touchbar-refresh-$UID` (mode inherited from `umask`,
 contents just a timestamp via mtime — nothing to read from it).

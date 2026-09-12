@@ -1,7 +1,11 @@
 #!/bin/bash
 # Claude usage for the Touch Bar widget.
 #
-# Prints: "<5h%> <7d%> <resetMin> <ageSec> <state>"
+# Prints (--raw): "<5h%> <7d%> <resetMin> <ageSec> <state> <scopedPct> <scopedName> <refresh>"
+#   refresh: only meaningful when state is `expired` — the healthy path never
+#            looks for the CLI, so it reports `manual` without having checked.
+#            auto    — the CLI was found, so the token fixes itself
+#            manual  — no `claude` binary found; the user has to refresh it
 #   state: ok      — fresh reading from the API
 #          stale   — API unreachable, showing the last good numbers
 #          expired — the OAuth token has expired; a refresh has been triggered
@@ -27,18 +31,37 @@ TTL=60
 REFRESH_LOCK=/tmp/.claude-touchbar-refresh-$UID
 REFRESH_COOLDOWN=180                   # don't relaunch more often than this
 
+REFRESH=manual                         # -> auto once a refresh is actually launched
+
+# launchd starts the app with PATH=/usr/bin:/bin:/usr/sbin:/sbin, and `bash -lc`
+# only extends that from /etc/paths — so a Homebrew or per-user install of the
+# CLI is invisible here even though `claude` resolves fine in your terminal.
+# Relying on `command -v` alone made try_refresh return silently and left the
+# widget claiming "refreshing…" forever. Look in the known locations too.
+find_claude() {
+  local c
+  c=$(command -v claude 2>/dev/null) && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  for c in /opt/homebrew/bin/claude /usr/local/bin/claude \
+           "$HOME/.local/bin/claude" "$HOME/.claude/local/claude" \
+           "$HOME/bin/claude"; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
 try_refresh() {
-  command -v claude >/dev/null 2>&1 || return
-  local last=$REFRESH_COOLDOWN
+  local cli last=$REFRESH_COOLDOWN
+  cli=$(find_claude) || return          # no CLI anywhere: stay REFRESH=manual
   if [ -f "$REFRESH_LOCK" ]; then
     last=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
   fi
-  [ "$last" -lt "$REFRESH_COOLDOWN" ] && return
+  REFRESH=auto
+  [ "$last" -lt "$REFRESH_COOLDOWN" ] && return   # one is already in flight
   : > "$REFRESH_LOCK"
   # Backgrounded and redirected to /dev/null so it never inherits this
   # script's stdout — that pipe is what NSTask reads to end-of-file, and an
   # inherited fd would make the Touch Bar poll block on this child too.
-  ( claude --model haiku --effort low --strict-mcp-config \
+  ( "$cli" --model haiku --effort low --strict-mcp-config \
       --no-session-persistence --max-budget-usd 0.02 -p hi \
       >/dev/null 2>&1 & )
 }
@@ -142,16 +165,18 @@ fi
 # A known cause beats "no data": report expired even with an empty cache,
 # otherwise a first run on a dead token looks like a first run on a fresh one.
 if [ -z "${P5:-}" ]; then
-  [ "$state" = expired ] && { echo "0 0 -1 -1 expired"; exit 0; }
-  echo "0 0 -1 -1 none"; exit 0
+  [ "$state" = expired ] && { echo "0 0 -1 -1 expired -1 - $REFRESH"; exit 0; }
+  echo "0 0 -1 -1 none -1 - $REFRESH"; exit 0
 fi
 [ "$state" = ok ] || AGE=$(( $(date +%s) - ${STAMP:-0} ))
 
 case "${1:-}" in
-  --raw) printf '%s %s %s %s %s %s %s\n' "$P5" "$P7" "$RESET" "$AGE" "$state" "${SP:--1}" "${SN:--}" ;;
+  --raw) printf '%s %s %s %s %s %s %s %s\n' "$P5" "$P7" "$RESET" "$AGE" "$state" "${SP:--1}" "${SN:--}" "$REFRESH" ;;
   *)
      case "$state" in
-       expired) printf 'token expired — refreshing…   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
+       expired) [ "$REFRESH" = auto ] \
+                  && printf 'token expired — refreshing…   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" \
+                  || printf 'token expired — run: claude -p hi   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
        stale)   printf '5h %s%%  7d %s%%   (stale %dm)\n' "$P5" "$P7" $((AGE/60)) ;;
        *)       printf '5h %s%%  7d %s%%' "$P5" "$P7"
                 [ "${SP:--1}" -gt 0 ] && printf '  %s %s%%' "${SN:--}" "$SP"
