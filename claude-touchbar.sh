@@ -1,7 +1,7 @@
 #!/bin/bash
 # Claude usage for the Touch Bar widget.
 #
-# Prints (--raw): "<5h%> <7d%> <resetMin> <ageSec> <state> <scopedPct> <scopedName> <refresh>"
+# Prints (--raw): "<5h%> <7d%> <resetMin> <resetMin7> <ageSec> <state> <scopedPct> <scopedName> <refresh>"
 #   refresh: only meaningful when state is `expired` — the healthy path never
 #            looks for the CLI, so it reports `manual` without having checked.
 #            auto    — the CLI was found, so the token fixes itself
@@ -19,7 +19,7 @@
 # or a log — and is unset immediately after.
 set -uo pipefail
 
-CACHE=/tmp/.claude-usage-$UID          # "5h 7d resetMin scopedPct scopedName epoch"
+CACHE=/tmp/.claude-usage-$UID          # "5h 7d resetMin resetMin7 scopedPct scopedName epoch"
 TTL=60
 
 # An expired token fixes itself the moment the `claude` CLI runs at all — it
@@ -71,15 +71,15 @@ try_refresh() {
 # version pointed at a hard-coded nvm path, which worked on exactly one machine.
 PY=/usr/bin/python3
 [ -x "$PY" ] || PY=$(command -v python3) || {
-  echo "0 0 -1 -1 none"; exit 0; }
+  echo "0 0 -1 -1 -1 none"; exit 0; }
 
-read_cache() {                          # -> P5 P7 RESET SP SN STAMP
+read_cache() {                          # -> P5 P7 RESET RESET7 SP SN STAMP
   [ -f "$CACHE" ] || return 1
-  read -r P5 P7 RESET SP SN STAMP < "$CACHE" 2>/dev/null || :
+  read -r P5 P7 RESET RESET7 SP SN STAMP < "$CACHE" 2>/dev/null || :
   [ -n "${P5:-}" ]
 }
 
-P5=; P7=; RESET=-1; SP=-1; SN=-; STAMP=0
+P5=; P7=; RESET=-1; RESET7=-1; SP=-1; SN=-; STAMP=0
 read_cache || :
 AGE=$(( $(date +%s) - ${STAMP:-0} ))
 
@@ -140,17 +140,21 @@ for l in j.get("limits") or []:
         nm = ((l.get("scope") or {}).get("model") or {}).get("display_name")
         if nm: sn = re.sub(r"\s+", "", nm)
 
-m = -1
-t = (j.get("five_hour") or {}).get("resets_at")
-if t:
+def reset_minutes(window):
+    t = (window or {}).get("resets_at")
+    if not t:
+        return -1
     try:
         # fromisoformat only learned to accept a trailing Z in 3.11.
         d = datetime.datetime.fromisoformat(t.replace("Z", "+00:00"))
-        m = max(0, round((d - datetime.datetime.now(d.tzinfo)).total_seconds() / 60))
+        return max(0, round((d - datetime.datetime.now(d.tzinfo)).total_seconds() / 60))
     except Exception:
-        pass
+        return -1
 
-print(f"{p5} {p7} {m} {sp} {sn}")')
+m = reset_minutes(j.get("five_hour"))
+m7 = reset_minutes(j.get("seven_day"))
+
+print(f"{p5} {p7} {m} {m7} {sp} {sn}")')
       case "$parsed" in
         ''|-1\ -1\ *) state=stale ;;
         *) printf '%s %s\n' "$parsed" "$(date +%s)" > "$CACHE"; chmod 600 "$CACHE"
@@ -165,13 +169,13 @@ fi
 # A known cause beats "no data": report expired even with an empty cache,
 # otherwise a first run on a dead token looks like a first run on a fresh one.
 if [ -z "${P5:-}" ]; then
-  [ "$state" = expired ] && { echo "0 0 -1 -1 expired -1 - $REFRESH"; exit 0; }
-  echo "0 0 -1 -1 none -1 - $REFRESH"; exit 0
+  [ "$state" = expired ] && { echo "0 0 -1 -1 -1 expired -1 - $REFRESH"; exit 0; }
+  echo "0 0 -1 -1 -1 none -1 - $REFRESH"; exit 0
 fi
 [ "$state" = ok ] || AGE=$(( $(date +%s) - ${STAMP:-0} ))
 
 case "${1:-}" in
-  --raw) printf '%s %s %s %s %s %s %s %s\n' "$P5" "$P7" "$RESET" "$AGE" "$state" "${SP:--1}" "${SN:--}" "$REFRESH" ;;
+  --raw) printf '%s %s %s %s %s %s %s %s %s\n' "$P5" "$P7" "$RESET" "$RESET7" "$AGE" "$state" "${SP:--1}" "${SN:--}" "$REFRESH" ;;
   *)
      case "$state" in
        expired) [ "$REFRESH" = auto ] \
@@ -180,6 +184,9 @@ case "${1:-}" in
        stale)   printf '5h %s%%  7d %s%%   (stale %dm)\n' "$P5" "$P7" $((AGE/60)) ;;
        *)       printf '5h %s%%  7d %s%%' "$P5" "$P7"
                 [ "${SP:--1}" -gt 0 ] && printf '  %s %s%%' "${SN:--}" "$SP"
-                printf '   reset %dh%02d\n' $((RESET/60)) $((RESET%60)) ;;
+                printf '   reset %dh%02d' $((RESET/60)) $((RESET%60))
+                [ "${RESET7:--1}" -ge 0 ] && \
+                  printf ' / %dd%02dh' $((RESET7/1440)) $(((RESET7/60)%24))
+                printf '\n' ;;
      esac ;;
 esac

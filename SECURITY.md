@@ -84,7 +84,7 @@ this page.
 values:
 
 ```
-<5h%> <7d%> <resetMinutes> <scopedPct> <scopedName> <unixTimestamp>
+<5h%> <7d%> <resetMinutes> <weeklyResetMinutes> <scopedPct> <scopedName> <unixTimestamp>
 ```
 
 Percentages and a timestamp. No token, no identifier, nothing about you.

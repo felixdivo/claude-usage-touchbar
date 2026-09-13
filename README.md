@@ -80,7 +80,7 @@ Check the script works on its own first:
 
 ```bash
 ~/bin/claude-touchbar.sh
-# 5h 26%  7d 91%   reset 2h05
+# 5h 26%  7d 91%   reset 2h05 / 1d14h
 ```
 
 If it says `token expired`, that's expected the first time — the script

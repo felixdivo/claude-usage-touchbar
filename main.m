@@ -114,7 +114,7 @@ static int ClipForMood(Mood m, int previous) {
 }
 
 @interface PetView : NSView
-@property (nonatomic) int p5, p7, resetMin, ageSec, scopedPct;
+@property (nonatomic) int p5, p7, resetMin, resetMin7, ageSec, scopedPct;
 @property (nonatomic, copy) NSString *scopedName;   // per-model weekly cap (e.g. Fable)
 @property (nonatomic, copy) NSString *state;   // ok | stale | expired | none
 @property (nonatomic) CGFloat x, dir, phase;
@@ -138,7 +138,7 @@ static int ClipForMood(Mood m, int previous) {
 
 - (instancetype)initWithFrame:(NSRect)f {
     if ((self = [super initWithFrame:f])) {
-        _x = 40; _dir = 1; _p5 = 0; _p7 = 0; _resetMin = -1;
+        _x = 40; _dir = 1; _p5 = 0; _p7 = 0; _resetMin = -1; _resetMin7 = -1;
         _act = ActWalk;
         _animationEnabled = YES;
         _nextActAt = 4.0;
@@ -593,6 +593,22 @@ static void DrawRight(NSString *s, CGFloat rightEdge, CGFloat y, NSDictionary *a
                               NSForegroundColorAttributeName: noteColor };
         [note drawAtPoint:NSMakePoint(READ_X + 17, TEXT_Y + 1) withAttributes:at];
     }
+
+    // Same idea beside the "7d" label: the weekly window resets on its own
+    // schedule, days out rather than hours, so it earns its own countdown
+    // instead of being folded into the note above. Skipped while stale —
+    // an unreachable API means this number is exactly as fossilised as the
+    // percentages next to it, and the "old" badge already says so once.
+    if (!old && self.resetMin7 >= 0 && n >= 2) {
+        NSString *note7 = (self.resetMin7 >= 1440)
+            ? [NSString stringWithFormat:@"%dd%02dh", self.resetMin7 / 1440, (self.resetMin7 / 60) % 24]
+            : [NSString stringWithFormat:@"%dh%02d", self.resetMin7 / 60, self.resetMin7 % 60];
+        NSDictionary *at7 = @{ NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:8
+                                                                                     weight:NSFontWeightMedium],
+                              NSForegroundColorAttributeName: [NSColor colorWithWhite:1.0 alpha:0.55] };
+        [note7 drawAtPoint:NSMakePoint(READ_X + (cellW + CELL_GAP) + 17, TEXT_Y + 1)
+             withAttributes:at7];
+    }
 }
 
 // A cell is label + percentage on one line, bar underneath, all cells identical.
@@ -990,21 +1006,22 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
             componentsSeparatedByString:@" "];
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (parts.count >= 5) {
+            if (parts.count >= 6) {
                 self.pet.p5 = parts[0].intValue;
                 self.pet.p7 = parts[1].intValue;
                 self.pet.resetMin = parts[2].intValue;
-                self.pet.ageSec = parts[3].intValue;
-                self.pet.state = parts[4];
+                self.pet.resetMin7 = parts[3].intValue;
+                self.pet.ageSec = parts[4].intValue;
+                self.pet.state = parts[5];
                 // The API also reports a per-model weekly cap (kind=weekly_scoped).
                 // Only surface it once it is actually being consumed — at 0% it is
                 // noise on a 30pt strip.
-                self.pet.scopedPct  = (parts.count >= 6) ? parts[5].intValue : -1;
-                self.pet.scopedName = (parts.count >= 7) ? parts[6] : @"";
+                self.pet.scopedPct  = (parts.count >= 7) ? parts[6].intValue : -1;
+                self.pet.scopedName = (parts.count >= 8) ? parts[7] : @"";
                 // Only claim a refresh is under way if the script actually
                 // launched one — it cannot when no `claude` binary exists.
-                self.pet.autoRefresh = (parts.count >= 8) && [parts[7] isEqualToString:@"auto"];
-                self.pet.haveData = ![parts[4] isEqualToString:@"none"];
+                self.pet.autoRefresh = (parts.count >= 9) && [parts[8] isEqualToString:@"auto"];
+                self.pet.haveData = ![parts[5] isEqualToString:@"none"];
             }
             self.polling = NO;
         });
@@ -1027,14 +1044,14 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 // look at what drawRect: produces instead of guessing from the code.
 static int RenderStates(NSString *dir) {
     NSDictionary *states = @{
-        @"01-low":      @[@12, @4,  @185, @"ok",      @0,  @""],
-        @"02-mid":      @[@48, @31, @92,  @"ok",      @0,  @""],
-        @"03-scoped":   @[@48, @31, @92,  @"ok",      @37, @"Fable"],
-        @"04-high":     @[@91, @68, @14,  @"ok",      @0,  @""],
-        @"05-both-high":@[@94, @96, @3,   @"ok",      @88, @"Fable"],
-        @"06-stale":    @[@48, @31, @92,  @"stale",   @0,  @""],
-        @"07-expired":  @[@48, @31, @-1,  @"expired", @0,  @""],
-        @"08-zero":     @[@0,  @0,  @300, @"ok",      @0,  @""],
+        @"01-low":      @[@12, @4,  @185, @2705, @"ok",      @0,  @""],
+        @"02-mid":      @[@48, @31, @92,  @2705, @"ok",      @0,  @""],
+        @"03-scoped":   @[@48, @31, @92,  @2705, @"ok",      @37, @"Fable"],
+        @"04-high":     @[@91, @68, @14,  @280,  @"ok",      @0,  @""],
+        @"05-both-high":@[@94, @96, @3,   @35,   @"ok",      @88, @"Fable"],
+        @"06-stale":    @[@48, @31, @92,  @2705, @"stale",   @0,  @""],
+        @"07-expired":  @[@48, @31, @-1,  @-1,   @"expired", @0,  @""],
+        @"08-zero":     @[@0,  @0,  @300, @9800, @"ok",      @0,  @""],
     };
     [NSFileManager.defaultManager createDirectoryAtPath:dir
                             withIntermediateDirectories:YES attributes:nil error:nil];
@@ -1043,7 +1060,8 @@ static int RenderStates(NSString *dir) {
         NSArray *s = states[name];
         PetView *v = [[PetView alloc] initWithFrame:NSMakeRect(0, 0, kSceneW, kSceneH)];
         v.p5 = [s[0] intValue]; v.p7 = [s[1] intValue]; v.resetMin = [s[2] intValue];
-        v.state = s[3]; v.scopedPct = [s[4] intValue]; v.scopedName = s[5];
+        v.resetMin7 = [s[3] intValue];
+        v.state = s[4]; v.scopedPct = [s[5] intValue]; v.scopedName = s[6];
         v.ageSec = 300; v.haveData = YES; v.x = 60;
 
         // Two passes, and the order matters. drawRect: opens by filling itself
