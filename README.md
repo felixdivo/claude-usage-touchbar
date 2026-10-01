@@ -107,33 +107,26 @@ project showing its own UI.
 
 ## Run it at login
 
-Two ways to do that, depending on whether you want this git checkout to stay
-where it is.
-
-**Straight from the checkout** — simplest, but the agent points at the bundle
-you built, so moving or deleting the checkout breaks it until you rebuild:
-
 ```bash
 make install-agent      # start at login, restart on crash
 make uninstall-agent    # remove it again
 ```
 
-**Installed into /Applications** — a real, standalone app, independent of
-this checkout:
+The agent points at the bundle where you built it rather than copying it —
+an ad-hoc signature does not survive a copy. Keep the checkout where it is, or
+re-run `make install-agent` after moving it.
+
+If you'd rather use **System Settings → General → Login Items & Extensions**
+instead of the launch agent, install a standalone copy first:
 
 ```bash
-make install-app                                          # copy + re-sign into /Applications
-make install-agent BUNDLE_PATH=/Applications/ClaudeTouchBar.app
-make uninstall-app                                         # remove the copy
+make install-app      # copy + re-sign into /Applications
+make uninstall-app    # remove it again
 ```
 
-`install-app` re-signs the copy itself — an ad-hoc signature does not survive
-a plain copy, only a re-sign at the new path makes it launchable there. Rerun
-`install-app` after every rebuild you want reflected in `/Applications`; it is
-not kept in sync automatically. Once it is in `/Applications`, you can also
-skip the launch agent entirely and add it from **System Settings → General →
-Login Items & Extensions → Open at Login → +** instead — pick whichever
-restart-on-crash behaviour matters more to you.
+Rerun `install-app` after every rebuild you want reflected there — it is not
+kept in sync automatically, and it has no restart-on-crash behaviour of its
+own (that's what the launch agent above is for; pick one or the other).
 
 Either way, it restarts on a crash but not when you quit it yourself, and it
 does not load outside a GUI session. Removing it leaves nothing behind: no

@@ -13,11 +13,6 @@ PLIST := $(HOME)/Library/LaunchAgents/$(AGENT).plist
 
 APPDIR := /Applications
 
-# Where install-agent points the launch agent at. Defaults to the bundle in
-# this checkout; override to point it at the /Applications copy instead, e.g.
-# `make install-agent BUNDLE_PATH=/Applications/ClaudeTouchBar.app`.
-BUNDLE_PATH ?= $(CURDIR)/$(BUNDLE)
-
 .PHONY: all assets test shots poses palette ruler sweat film film-drag install-script install-app uninstall-app install-agent uninstall-agent run stop clean missing-assets
 
 all: $(BIN)
@@ -79,24 +74,18 @@ install-app: $(BIN)
 	@codesign --force --sign - "$(APPDIR)/$(BUNDLE)"
 	@echo "installed $(APPDIR)/$(BUNDLE)"
 	@echo ""
-	@echo "Add it to Login Items yourself:"
-	@echo "  System Settings > General > Login Items & Extensions > Open at Login > +"
-	@echo "  then pick $(APPDIR)/$(BUNDLE)"
-	@echo ""
-	@echo "...or let launchd do it, with the restart-on-crash behaviour below:"
-	@echo "  make install-agent BUNDLE_PATH=$(APPDIR)/$(BUNDLE)"
+	@echo "Add it to Login Items: System Settings > General > Login Items &"
+	@echo "Extensions > Open at Login > +, then pick $(APPDIR)/$(BUNDLE)"
 
 uninstall-app:
 	@rm -rf "$(APPDIR)/$(BUNDLE)"
 	@echo "removed $(APPDIR)/$(BUNDLE)"
 
-# Start at login. Points at BUNDLE_PATH, which defaults to the bundle in this
-# checkout — run `make install-app` first and pass BUNDLE_PATH to point this
-# at /Applications instead, so the agent survives the checkout being moved
-# or deleted.
+# Start at login. An ad-hoc signature does not survive the bundle being copied,
+# so the agent points at the build directory rather than moving the app.
 install-agent: $(BIN)
 	@mkdir -p $(HOME)/Library/LaunchAgents
-	@sed 's|__APP__|$(BUNDLE_PATH)|' $(AGENT).plist > $(PLIST)
+	@sed 's|__APP__|$(CURDIR)/$(BUNDLE)|' $(AGENT).plist > $(PLIST)
 	@launchctl bootout gui/$(shell id -u)/$(AGENT) 2>/dev/null || true
 	@# bootout returns before the job is fully gone, and bootstrapping over a
 	@# job still scheduled to respawn fails with EIO. Wait for it to clear.
@@ -107,10 +96,9 @@ install-agent: $(BIN)
 	@# Re-sign immediately before loading: `make` re-signs on every build, and a
 	@# running launchd job holding the old signature makes the next spawn die
 	@# with OS_REASON_CODESIGNING.
-	@codesign --force --sign - "$(BUNDLE_PATH)" 2>/dev/null
+	@codesign --force --sign - $(BUNDLE) 2>/dev/null
 	@launchctl bootstrap gui/$(shell id -u) $(PLIST)
 	@echo "loaded $(AGENT) — starts at login, restarts if it dies"
-	@echo "  using $(BUNDLE_PATH)"
 
 uninstall-agent:
 	@launchctl bootout gui/$(shell id -u)/$(AGENT) 2>/dev/null || true
