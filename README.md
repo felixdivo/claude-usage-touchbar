@@ -88,10 +88,16 @@ already fired off `claude --model haiku -p hi` in the background to refresh
 it (throttled to once every 3 minutes), so it should clear itself within a
 few seconds. No re-login, no prompt, nothing for you to run by hand.
 
-If the widget shows `claude -p hi` instead of `refreshing…`, it could not
-find the CLI. launchd does not put Homebrew on `PATH`, so the script checks
-the standard install locations directly; a `claude` somewhere else needs a
-symlink into one of them (e.g. `~/.local/bin`).
+If the widget shows `run /login in claude` instead of `refreshing…`, the
+automatic refresh is not going to work, for one of two reasons:
+
+- **The refresh was tried and the token is still expired.** The refresh token
+  itself has died (revoked, or unused too long), and only a real login fixes
+  that: run `claude`, then `/login`. The widget recovers on its own within a
+  minute of you doing so.
+- **No `claude` binary was found.** launchd does not put Homebrew on `PATH`, so
+  the script checks the standard install locations directly; a `claude`
+  somewhere else needs a symlink into one of them (e.g. `~/.local/bin`).
 
 ### Why the poses are not in this repository
 

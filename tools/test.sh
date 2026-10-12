@@ -83,6 +83,35 @@ if [ -z "$got" ]; then pass=$((pass+1)); echo "  ok    malformed JSON prints not
 else fail=$((fail+1)); echo "  FAIL  malformed JSON printed [$got]"; fi
 
 echo
+echo "refresh:"
+# Run the shipped try_refresh against a stub `claude`, so the lock/throttle/
+# give-up logic is exercised without touching the keychain or the network.
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+printf '#!/bin/sh\necho x >> "%s/calls"\n' "$T" > "$T/claude"; chmod +x "$T/claude"
+BLOCK=$(awk '/^REFRESH_LOCK=/{f=1} /^# \/usr\/bin\/python3/{f=0} f' claude-touchbar.sh)
+[ -n "$BLOCK" ] || { echo "FAIL: could not extract try_refresh"; exit 1; }
+attempt() { # -> "<REFRESH> <total launches>"
+  bash -c "$BLOCK"'
+    REFRESH_LOCK='"$T"'/lock
+    find_claude() { printf %s '"$T"'/claude; }
+    try_refresh; echo "$REFRESH"' 2>/dev/null | { read -r r; sleep 1; echo "$r $(wc -l < "$T/calls" | tr -d ' ')"; }
+}
+expect() { # name, expected
+  local got; got=$(attempt)
+  if [ "$got" = "$2" ]; then pass=$((pass+1)); printf '  ok    %s\n' "$1"
+  else fail=$((fail+1)); printf '  FAIL  %s\n         got      [%s]\n         expected [%s]\n' "$1" "$got" "$2"; fi
+}
+age_lock() { touch -t 200001010000 "$T/lock"; }
+rm -f "$T/lock"; : > "$T/calls"
+expect "first expiry launches one refresh"            "auto 1"
+expect "inside the cooldown it does not relaunch"     "auto 1"
+age_lock
+expect "still expired after the cooldown: gives up"   "manual 2"
+expect "and does not claim a refresh in flight"       "manual 2"
+rm -f "$T/lock"
+expect "a successful reading (lock removed) resets"   "auto 3"
+
+echo
 echo "shell:"
 if command -v shellcheck >/dev/null; then
   if shellcheck -S warning claude-touchbar.sh tools/test.sh; then

@@ -107,9 +107,12 @@ executable at one of those paths is ever run; nothing is downloaded, and no
 directory is searched recursively. If none exists, no subprocess is started
 and the widget says `claude -p hi` rather than claiming to refresh.
 
-in the background, throttled to once every 180 seconds by an empty marker
-file at `/tmp/.claude-touchbar-refresh-$UID` (mode inherited from `umask`,
-contents just a timestamp via mtime — nothing to read from it).
+in the background, throttled to once every 180 seconds by a marker file at
+`/tmp/.claude-touchbar-refresh-$UID` (mode inherited from `umask`). Its mtime is
+the throttle; its only content is a count of attempts in the current expiry,
+which is how the widget learns a refresh did not work and stops saying
+"refreshing". It is deleted as soon as a reading succeeds. Nothing sensitive is
+in it.
 
 This is the same `claude` binary you already run and trust, not code from
 this project reaching out on its own. It is launched, not linked: this

@@ -4,8 +4,10 @@
 # Prints (--raw): "<5h%> <7d%> <resetMin> <resetMin7> <ageSec> <state> <scopedPct> <scopedName> <refresh>"
 #   refresh: only meaningful when state is `expired` — the healthy path never
 #            looks for the CLI, so it reports `manual` without having checked.
-#            auto    — the CLI was found, so the token fixes itself
-#            manual  — no `claude` binary found; the user has to refresh it
+#            auto    — a refresh is under way and has not yet failed
+#            manual  — it will not fix itself: no `claude` binary was found, or a
+#                      refresh was already tried and the token is still expired
+#                      (the refresh token is dead; only `/login` helps)
 #   state: ok      — fresh reading from the API
 #          stale   — API unreachable, showing the last good numbers
 #          expired — the OAuth token has expired; a refresh has been triggered
@@ -28,7 +30,7 @@ TTL=60
 # it off ourselves: smallest model, lowest effort, no MCP servers, no session
 # saved — a few cents' worth of "hi" at most, and often free-tier haiku usage
 # doesn't even touch the limits this widget is showing you.
-REFRESH_LOCK=/tmp/.claude-touchbar-refresh-$UID
+REFRESH_LOCK=/tmp/.claude-touchbar-refresh-$UID   # holds the attempt count; removed once a reading succeeds
 REFRESH_COOLDOWN=180                   # don't relaunch more often than this
 
 REFRESH=manual                         # -> auto once a refresh is actually launched
@@ -49,21 +51,30 @@ find_claude() {
   return 1
 }
 
+# The CLI can only refresh with a live refresh token. When that is dead too,
+# `claude -p hi` fails and the token stays expired — so a second attempt in the
+# same expiry episode means the first one did not work, and promising "refreshing"
+# any longer would be a lie. The lock holds the attempt count and is removed as
+# soon as a reading succeeds.
 try_refresh() {
-  local cli last=$REFRESH_COOLDOWN
+  local cli age=$REFRESH_COOLDOWN n=0
   cli=$(find_claude) || return          # no CLI anywhere: stay REFRESH=manual
   if [ -f "$REFRESH_LOCK" ]; then
-    last=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
+    age=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
+    read -r n < "$REFRESH_LOCK" 2>/dev/null || n=0
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
   fi
-  REFRESH=auto
-  [ "$last" -lt "$REFRESH_COOLDOWN" ] && return   # one is already in flight
-  : > "$REFRESH_LOCK"
-  # Backgrounded and redirected to /dev/null so it never inherits this
-  # script's stdout — that pipe is what NSTask reads to end-of-file, and an
-  # inherited fd would make the Touch Bar poll block on this child too.
-  ( "$cli" --model haiku --effort low --strict-mcp-config \
-      --no-session-persistence --max-budget-usd 0.02 -p hi \
-      >/dev/null 2>&1 & )
+  if [ "$age" -ge "$REFRESH_COOLDOWN" ]; then
+    n=$((n + 1))
+    printf '%s\n' "$n" > "$REFRESH_LOCK"
+    # Backgrounded and redirected to /dev/null so it never inherits this
+    # script's stdout — that pipe is what NSTask reads to end-of-file, and an
+    # inherited fd would make the Touch Bar poll block on this child too.
+    ( "$cli" --model haiku --effort low --strict-mcp-config \
+        --no-session-persistence --max-budget-usd 0.02 -p hi \
+        >/dev/null 2>&1 & )
+  fi
+  [ "$n" -le 1 ] && REFRESH=auto
 }
 
 # /usr/bin/python3 ships with the Command Line Tools, which this project already
@@ -158,7 +169,7 @@ print(f"{p5} {p7} {m} {m7} {sp} {sn}")')
       case "$parsed" in
         ''|-1\ -1\ *) state=stale ;;
         *) printf '%s %s\n' "$parsed" "$(date +%s)" > "$CACHE"; chmod 600 "$CACHE"
-           read_cache || :; AGE=0; state=ok ;;
+           read_cache || :; AGE=0; state=ok; rm -f "$REFRESH_LOCK" ;;
       esac
     else
       state=stale                       # network/5xx — keep the last good numbers
@@ -180,7 +191,7 @@ case "${1:-}" in
      case "$state" in
        expired) [ "$REFRESH" = auto ] \
                   && printf 'token expired — refreshing…   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" \
-                  || printf 'token expired — run: claude -p hi   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
+                  || printf 'token expired — run claude, then /login   (last: 5h %s%%  7d %s%%)\n' "$P5" "$P7" ;;
        stale)   printf '5h %s%%  7d %s%%   (stale %dm)\n' "$P5" "$P7" $((AGE/60)) ;;
        *)       printf '5h %s%%  7d %s%%' "$P5" "$P7"
                 [ "${SP:--1}" -gt 0 ] && printf '  %s %s%%' "${SN:--}" "$SP"
