@@ -110,7 +110,10 @@ def run_sandboxed(node, tmp, args):
     profile = SANDBOX.format(node=real_node, tmp=real_tmp)
     cmd = ["/usr/bin/sandbox-exec", "-p", profile,
            real_node, "--permission", f"--allow-fs-read={real_tmp}"] + args
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    # A bare environment: nothing of yours (tokens in env vars, paths) for the
+    # page to read and smuggle out through the grid values.
+    env = {"PATH": "/usr/bin:/bin", "HOME": real_tmp, "LANG": "C"}
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
 
 
 HEX = re.compile(r"#?[0-9a-fA-F]{6}")
