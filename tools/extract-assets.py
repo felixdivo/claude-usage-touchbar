@@ -108,15 +108,19 @@ def run_sandboxed(node, tmp, args):
         if '"' in p or "\\" in p:
             die(f"refusing to embed path in sandbox profile: {p!r}")
     profile = SANDBOX.format(node=real_node, tmp=real_tmp)
+    # Resolved paths only: the temp dir sits behind the /var -> /private/var
+    # symlink, and node's permission check stats the unresolved path first,
+    # which lies outside --allow-fs-read.
     cmd = ["/usr/bin/sandbox-exec", "-p", profile,
-           real_node, "--permission", f"--allow-fs-read={real_tmp}"] + args
+           real_node, "--permission", f"--allow-fs-read={real_tmp}"] + \
+          [os.path.realpath(a) for a in args]
     # A bare environment: nothing of yours (tokens in env vars, paths) for the
     # page to read and smuggle out through the grid values.
     env = {"PATH": "/usr/bin:/bin", "HOME": real_tmp, "LANG": "C"}
     return subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
 
 
-HEX = re.compile(r"#?[0-9a-fA-F]{6}")
+HEX = re.compile(r"#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
 
 
 def validate_clip(name, data):
@@ -132,7 +136,8 @@ def validate_clip(name, data):
         if not isinstance(pal, list) or not 1 <= len(pal) <= 16:
             raise ValueError("palette is not a list of 1-16 colours")
         for c in pal:
-            if c is not None and not (isinstance(c, str) and HEX.fullmatch(c)):
+            # "transparent" marks index 0, which the renderer never draws.
+            if c not in (None, "transparent") and not (isinstance(c, str) and HEX.fullmatch(c)):
                 raise ValueError(f"bad palette entry {c!r}")
     frames = []
     for fr in data["frames"]:
@@ -224,6 +229,8 @@ def main():
             rgb = []
             for c in pal[:16]:
                 c = (c or "").lstrip("#")
+                if len(c) == 3:                 # CSS shorthand: #555 -> #555555
+                    c = "".join(ch * 2 for ch in c)
                 rgb.append(tuple(int(c[i:i+2], 16) for i in (0, 2, 4)) if len(c) == 6 else (0, 0, 0))
             body = ",".join("{%d,%d,%d}" % v for v in rgb)
             fh.write(f"static const unsigned char kPal_{name}[][3] = {{{body}}};\n")
