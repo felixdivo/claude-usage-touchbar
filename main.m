@@ -106,11 +106,13 @@ static int ClipForMood(Mood m, int previous) {
         case MoodTired: pool = tired; n = sizeof(tired) / sizeof(int); break;
         default:        pool = panic; n = sizeof(panic) / sizeof(int); break;
     }
+    // extract-assets.py refuses to write a partial set, but an index past the
+    // end of kClawdClips would read arbitrary memory, so check here as well.
     for (int tries = 0; tries < 8; tries++) {
         int pick = pool[arc4random_uniform(n)];
-        if (pick != previous) return pick;
+        if (pick != previous && pick < kClawdClipCount) return pick;
     }
-    return pool[0];
+    return pool[0] < kClawdClipCount ? pool[0] : 0;
 }
 
 @interface PetView : NSView
@@ -839,7 +841,7 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 @property (nonatomic, strong) id activity;
 @property (nonatomic) NSTimeInterval lastFrame;
 @property (nonatomic) NSTimeInterval lastPoll;
-@property (nonatomic) BOOL polling, asleep;
+@property (nonatomic) BOOL polling, asleep, dark;
 // User tapped the close button. Distinct from `asleep`: a locked screen is
 // temporary and self-clearing, this is a deliberate choice that must survive
 // every future app-switch until the mini bar's reopen button (kMiniID) brings
@@ -888,9 +890,12 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
     [self present];
 
     // App Nap will freeze the animation the moment you switch away, which is
-    // precisely when the pet is worth watching.
-    self.activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiated
-                                                                 reason:@"animate the Touch Bar pet"];
+    // precisely when the pet is worth watching. Plain NSActivityUserInitiated
+    // also includes NSActivityIdleSystemSleepDisabled: the Mac would never
+    // idle-sleep while this runs.
+    self.activity = [NSProcessInfo.processInfo
+        beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+                          reason:@"animate the Touch Bar pet"];
 
     self.lastFrame = NSDate.timeIntervalSinceReferenceDate;
     self.frameTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / kFPS repeats:YES
@@ -909,6 +914,11 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
         addObserver:self selector:@selector(sleep) name:@"com.apple.screenIsLocked" object:nil];
     [NSDistributedNotificationCenter.defaultCenter
         addObserver:self selector:@selector(wake) name:@"com.apple.screenIsUnlocked" object:nil];
+    // Nor into a display that has gone dark without locking.
+    [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserver:self selector:@selector(screensSlept) name:NSWorkspaceScreensDidSleepNotification object:nil];
+    [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserver:self selector:@selector(screensWoke) name:NSWorkspaceScreensDidWakeNotification object:nil];
 
     [self poll];
 }
@@ -926,6 +936,10 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 
 - (void)sleep { self.asleep = YES; }
 - (void)wake  { self.asleep = NO; [self present]; }
+// Separate from `asleep`: the display can wake while the screen is still
+// locked, and that must not restart the animation.
+- (void)screensSlept { self.dark = YES; }
+- (void)screensWoke  { self.dark = NO; }
 
 - (nullable NSTouchBarItem *)touchBar:(NSTouchBar *)bar
                 makeItemForIdentifier:(NSTouchBarItemIdentifier)identifier {
@@ -970,7 +984,7 @@ static void DrawDrop(CGFloat x, CGFloat y, CGFloat scale, NSColor *c, CGFloat al
 }
 
 - (void)frame {
-    if (self.asleep) return;
+    if (self.asleep || self.dark) return;
 
     NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
     NSTimeInterval dt = MIN(now - self.lastFrame, 0.25);   // clamp after a stall

@@ -106,10 +106,31 @@ rm -f "$T/lock"; : > "$T/calls"
 expect "first expiry launches one refresh"            "auto 1"
 expect "inside the cooldown it does not relaunch"     "auto 1"
 age_lock
-expect "still expired after the cooldown: gives up"   "manual 2"
-expect "and does not claim a refresh in flight"       "manual 2"
+expect "still expired after the cooldown: gives up"   "manual 1"
+expect "and never relaunches in the same episode"     "manual 1"
 rm -f "$T/lock"
-expect "a successful reading (lock removed) resets"   "auto 3"
+expect "a successful reading (lock removed) resets"   "auto 2"
+
+echo
+echo "cache:"
+# The cache fields reach $(( )), where bash runs `a[$(cmd)]`. read_cache must
+# refuse anything that is not a plain integer before it gets there.
+RC=$(awk '/^read_cache\(\) \{/{f=1} f{print} f&&/^\}/{exit}' claude-touchbar.sh)
+[ -n "$RC" ] || { echo "FAIL: could not extract read_cache"; exit 1; }
+cache_case() { # name, cache line, expected "<rc> <P5> <SN>"
+  printf '%s\n' "$2" > "$T/cache"; rm -f "$T/pwned"
+  local got; got=$(bash -c "$RC"'
+    CACHE='"$T"'/cache; P5=; SN=-
+    read_cache; rc=$?
+    echo "$rc ${P5:-_} $SN $(( 0 + ${STAMP:-0} ))"' 2>/dev/null)
+  if [ ! -e "$T/pwned" ] && [ "${got% *}" = "$3" ]; then pass=$((pass+1)); printf '  ok    %s\n' "$1"
+  else fail=$((fail+1)); printf '  FAIL  %s\n         got      [%s] pwned=%s\n         expected [%s]\n' "$1" "$got" "$([ -e "$T/pwned" ] && echo yes || echo no)" "$3"; fi
+}
+cache_case "a valid line is read"           "12 4 185 2705 37 Fable 1700000000" "0 12 Fable"
+cache_case "negative fields are fine"       "12 4 -1 -1 -1 - 1700000000"        "0 12 -"
+cache_case "command in STAMP is refused"    "12 4 1 1 1 x a[\$(touch $T/pwned)]" "1 _ -"
+cache_case "command in RESET is refused"    "12 4 a[\$(touch $T/pwned)] 1 1 x 1" "1 _ -"
+cache_case "odd model name is neutralised"  "12 4 1 1 1 \$(id) 1"                 "0 12 -"
 
 echo
 echo "shell:"

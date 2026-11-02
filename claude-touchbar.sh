@@ -20,8 +20,18 @@
 # so nothing prompts), goes into a curl header over stdin — never argv, a file,
 # or a log — and is unset immediately after.
 set -uo pipefail
+umask 077
 
-CACHE=/tmp/.claude-usage-$UID          # "5h 7d resetMin resetMin7 scopedPct scopedName epoch"
+# Per-user cache, not /tmp: a predictable name in a world-writable directory
+# lets another local account pre-create the file (spoofed numbers, symlink
+# clobbering — and, since the fields reach $(( )), code execution as you).
+CACHE_DIR="$HOME/Library/Caches/local.claude-touchbar"
+mkdir -p "$CACHE_DIR" 2>/dev/null
+if [ -L "$CACHE_DIR" ] || [ ! -O "$CACHE_DIR" ]; then
+  echo "0 0 -1 -1 -1 none -1 - manual"; exit 0
+fi
+chmod 700 "$CACHE_DIR"
+CACHE=$CACHE_DIR/usage                 # "5h 7d resetMin resetMin7 scopedPct scopedName epoch"
 TTL=60
 
 # An expired token fixes itself the moment the `claude` CLI runs at all — it
@@ -30,8 +40,8 @@ TTL=60
 # it off ourselves: smallest model, lowest effort, no MCP servers, no session
 # saved — a few cents' worth of "hi" at most, and often free-tier haiku usage
 # doesn't even touch the limits this widget is showing you.
-REFRESH_LOCK=/tmp/.claude-touchbar-refresh-$UID   # holds the attempt count; removed once a reading succeeds
-REFRESH_COOLDOWN=180                   # don't relaunch more often than this
+REFRESH_LOCK=$CACHE_DIR/refresh       # exists once a refresh was launched; removed once a reading succeeds
+REFRESH_COOLDOWN=180                   # how long a launched refresh counts as "under way"
 
 REFRESH=manual                         # -> auto once a refresh is actually launched
 
@@ -52,29 +62,33 @@ find_claude() {
 }
 
 # The CLI can only refresh with a live refresh token. When that is dead too,
-# `claude -p hi` fails and the token stays expired — so a second attempt in the
-# same expiry episode means the first one did not work, and promising "refreshing"
-# any longer would be a lie. The lock holds the attempt count and is removed as
-# soon as a reading succeeds.
+# `claude -p hi` fails and the token stays expired. So: exactly one launch per
+# expiry episode. Relaunching every cooldown used to fire a real request every
+# three minutes, forever, whenever the token stayed expired. If it has not
+# worked once the cooldown is over, it will not, and only `/login` helps. The
+# lock is removed as soon as a reading succeeds, which starts a new episode.
+#
+# Opt out entirely: defaults write local.claude-touchbar AutoRefresh -bool NO
 try_refresh() {
-  local cli age=$REFRESH_COOLDOWN n=0
+  local cli age=0
+  [ "$(defaults read local.claude-touchbar AutoRefresh 2>/dev/null)" = 0 ] && return
   cli=$(find_claude) || return          # no CLI anywhere: stay REFRESH=manual
-  if [ -f "$REFRESH_LOCK" ]; then
-    age=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
-    read -r n < "$REFRESH_LOCK" 2>/dev/null || n=0
-    case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  fi
-  if [ "$age" -ge "$REFRESH_COOLDOWN" ]; then
-    n=$((n + 1))
-    printf '%s\n' "$n" > "$REFRESH_LOCK"
+  if [ ! -e "$REFRESH_LOCK" ]; then
+    : > "$REFRESH_LOCK"
     # Backgrounded and redirected to /dev/null so it never inherits this
     # script's stdout — that pipe is what NSTask reads to end-of-file, and an
     # inherited fd would make the Touch Bar poll block on this child too.
-    ( "$cli" --model haiku --effort low --strict-mcp-config \
-        --no-session-persistence --max-budget-usd 0.02 -p hi \
-        >/dev/null 2>&1 & )
+    # Run from the cache dir so no project CLAUDE.md or settings are picked
+    # up, and load only project/local settings (there are none there): your
+    # user-level hooks and plugins stay out of a background process.
+    ( cd "${REFRESH_LOCK%/*}" || exit
+      "$cli" --model haiku --effort low --strict-mcp-config \
+        --setting-sources project,local --no-session-persistence \
+        --max-budget-usd 0.02 -p hi >/dev/null 2>&1 & )
+  else
+    age=$(( $(date +%s) - $(stat -f %m "$REFRESH_LOCK" 2>/dev/null || echo 0) ))
   fi
-  [ "$n" -le 1 ] && REFRESH=auto
+  [ "$age" -lt "$REFRESH_COOLDOWN" ] && REFRESH=auto
 }
 
 # /usr/bin/python3 ships with the Command Line Tools, which this project already
@@ -85,8 +99,17 @@ PY=/usr/bin/python3
   echo "0 0 -1 -1 -1 none"; exit 0; }
 
 read_cache() {                          # -> P5 P7 RESET RESET7 SP SN STAMP
-  [ -f "$CACHE" ] || return 1
+  local v
+  [ -f "$CACHE" ] && [ ! -L "$CACHE" ] || return 1
   read -r P5 P7 RESET RESET7 SP SN STAMP < "$CACHE" 2>/dev/null || :
+  # These fields reach $(( )), and bash evaluates `a[$(cmd)]` found there, so
+  # anything but a plain integer is refused rather than trusted.
+  for v in "${P5:-}" "${P7:-}" "${RESET:-}" "${RESET7:-}" "${SP:-}" "${STAMP:-}"; do
+    case "${v#-}" in
+      ''|*[!0-9]*) P5=; P7=; RESET=-1; RESET7=-1; SP=-1; SN=-; STAMP=0; return 1 ;;
+    esac
+  done
+  case "${SN:-}" in ''|*[!A-Za-z0-9._-]*) SN=- ;; esac
   [ -n "${P5:-}" ]
 }
 
@@ -100,11 +123,17 @@ if [ "${STAMP:-0}" -eq 0 ] || [ "$AGE" -ge "$TTL" ]; then
 
   # Check expiry locally first: it tells us *why* we failed instead of guessing
   # from an HTTP code, and saves a round trip on a token that cannot work.
+  # A failed read (no item, locked keychain, unexpected JSON) is not an expired
+  # token: reporting it as one used to trigger the refresh on every poll.
   expired=$(printf '%s' "$cred" | "$PY" -c 'import json,sys,time
 try: print("1" if json.load(sys.stdin)["claudeAiOauth"]["expiresAt"] < time.time()*1000 else "0")
-except Exception: print("1")')
+except Exception: print("err")')
 
-  if [ "$expired" = "1" ]; then
+  if [ "$expired" = "err" ]; then
+    unset cred
+    state=stale
+  elif [ "$expired" = "1" ]; then
+    unset cred                          # holds the refresh token too; drop it now
     state=expired
     try_refresh
   else
@@ -149,7 +178,7 @@ for l in j.get("limits") or []:
     elif k == "weekly_scoped":
         sp = round(v)
         nm = ((l.get("scope") or {}).get("model") or {}).get("display_name")
-        if nm: sn = re.sub(r"\s+", "", nm)
+        if nm: sn = re.sub(r"[^A-Za-z0-9._-]", "", nm) or "-"
 
 def reset_minutes(window):
     t = (window or {}).get("resets_at")
