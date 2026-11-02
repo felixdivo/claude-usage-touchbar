@@ -57,8 +57,9 @@ See [SECURITY.md](SECURITY.md) for exactly where the token goes.
 - macOS 12+ — developed and tested on macOS 26.4
 - Xcode Command Line Tools: `xcode-select --install`
 - Claude Code, signed in (`claude` in a terminal)
-- Node, **for the build only**: `brew install node`. It runs the pose data
-  through its own engine once, at `make assets` time. Neither the widget nor
+- Node 22.13 or newer (it needs `node --permission`), **for the build only**: `brew install node`. It runs the
+  pose data through its own engine once, at `make assets` time, sandboxed with
+  `--permission` and `sandbox-exec` (see SECURITY.md), which older Node lacks. Neither the widget nor
   the usage script uses it afterwards — those need nothing beyond what the
   Command Line Tools already installed.
 
@@ -85,8 +86,10 @@ Check the script works on its own first:
 
 If it says `token expired`, that's expected the first time — the script
 already fired off `claude --model haiku -p hi` in the background to refresh
-it (throttled to once every 3 minutes), so it should clear itself within a
-few seconds. No re-login, no prompt, nothing for you to run by hand.
+it (once per expiry; it is not retried), so it should clear itself within a
+few seconds. No re-login, no prompt, nothing for you to run by hand. Each
+refresh is a real request. Turn it off with
+`defaults write local.claude-touchbar AutoRefresh -bool NO`.
 
 If the widget shows `run /login in claude` instead of `refreshing…`, the
 automatic refresh is not going to work, for one of two reasons:

@@ -19,8 +19,15 @@ and asks for no new access. On most machines `/usr/bin/security` is already a
 trusted application on that item, so no dialog appears; if one does, it will
 name `security`.
 
-From the returned JSON only `claudeAiOauth.accessToken` and
-`claudeAiOauth.expiresAt` are used. `refreshToken` is never read.
+`-w` returns the whole credential JSON, `refreshToken` included, into a
+shell variable. Only `claudeAiOauth.accessToken` and `claudeAiOauth.expiresAt`
+are parsed out of it, and the variable is `unset` straight after, on every
+branch.
+
+Note what that ACL means: `/usr/bin/security` hands this token to *any*
+process running as you, without a prompt. That is Claude Code's and macOS's
+posture, not something this project creates, but it is why anything that runs
+code as you (see "Build time" below) has to be treated as able to read it.
 
 ## Where the token goes
 
@@ -54,7 +61,7 @@ Nothing, with respect to your credentials. `ClaudeTouchBar.app`:
 - never links `Security.framework` and never calls any keychain API
 - opens no sockets — it has no networking code at all
 - spawns exactly one subprocess: `/bin/bash -lc ~/bin/claude-touchbar.sh --raw`
-- parses six whitespace-separated numbers and strings from that output
+- parses nine whitespace-separated numbers and strings from that output
 
 The split exists so that the component with credential and network access is
 around 100 lines of shell you can audit in a sitting, rather than a compiled
@@ -80,15 +87,22 @@ this page.
 
 ## What is cached
 
-`/tmp/.claude-usage-$UID`, mode `0600`, containing six whitespace-separated
-values:
+`~/Library/Caches/local.claude-touchbar/usage`, in a directory the script
+creates as mode `0700` and refuses to use if it is a symlink or not owned by
+you, containing seven whitespace-separated values:
 
 ```
 <5h%> <7d%> <resetMinutes> <weeklyResetMinutes> <scopedPct> <scopedName> <unixTimestamp>
 ```
 
-Percentages and a timestamp. No token, no identifier, nothing about you.
+Percentages, a model name and a timestamp. No token, no identifier.
 Delete it whenever you like; it is rebuilt within a minute.
+
+Earlier versions used `/tmp/.claude-usage-$UID`. A predictable name in a
+world-writable directory let another local account pre-create the file, and
+since its fields reach bash arithmetic, where `a[$(cmd)]` is executed, that
+was code execution as you. `read_cache` now also refuses any field that is
+not a plain integer, and `tools/test.sh` checks both payloads.
 
 ## Auto-refreshing an expired token
 
@@ -107,12 +121,26 @@ executable at one of those paths is ever run; nothing is downloaded, and no
 directory is searched recursively. If none exists, no subprocess is started
 and the widget says `claude -p hi` rather than claiming to refresh.
 
-in the background, throttled to once every 180 seconds by a marker file at
-`/tmp/.claude-touchbar-refresh-$UID` (mode inherited from `umask`). Its mtime is
-the throttle; its only content is a count of attempts in the current expiry,
-which is how the widget learns a refresh did not work and stops saying
-"refreshing". It is deleted as soon as a reading succeeds. Nothing sensitive is
-in it.
+in the background, **once per expiry episode**, marked by an empty file
+`~/Library/Caches/local.claude-touchbar/refresh`. For 180 seconds after the
+launch the widget says "refreshing". If the token is still expired after that,
+it says to run `/login` and launches nothing more until a reading succeeds
+again (which deletes the marker). Earlier versions relaunched every 180 seconds
+indefinitely.
+
+A failed keychain read (no item, locked keychain, unexpected JSON) is reported
+as `stale`, not `expired`, so it never triggers a refresh.
+
+The CLI runs from the cache directory with `--setting-sources project,local`,
+so no project `CLAUDE.md` or settings are picked up, and your user-level hooks
+and plugins do not run in this background process. *Unverified:* that the
+refresh still succeeds with that flag on every CLI version. If it does not, the
+widget falls back to telling you to run `/login`. Your user `~/.claude/CLAUDE.md`
+is still loaded and sent with the "hi", as in any session. Each refresh is a
+real request: assume it can open a new 5-hour usage window.
+
+Turn it off entirely with
+`defaults write local.claude-touchbar AutoRefresh -bool NO`.
 
 This is the same `claude` binary you already run and trust, not code from
 this project reaching out on its own. It is launched, not linked: this
@@ -124,6 +152,24 @@ script still never does), and makes whatever network calls the `claude` CLI
 itself makes to authenticate; auditing *that* is Anthropic's CLI, not this
 project, and outside this document's scope. `api.anthropic.com` remains the
 only host `claude-touchbar.sh`'s own code (the `curl` call above) contacts.
+
+## Build time: `make assets`
+
+`tools/extract-assets.py` downloads JavaScript from claudepix.vercel.app, a
+third-party site, and has to *execute* it to compute the pose grids. Run
+unconfined, that code could do anything you can, including reading the token
+above. It now runs under two independent layers:
+
+- Node's permission model (`--permission`, Node >= 22): file reads only
+  inside the temp dir, no file writes, no `child_process`, no workers, no
+  native addons.
+- `sandbox-exec`: no network, no writes outside the temp dir, and node is the
+  only executable it may start.
+
+Its output is untrusted too, because it is written into `clawd_presets.h` and
+compiled. Every value is type- and range-checked first (`hold` 1-60000, grid
+20x20 of ints 0-15, palette `#rrggbb`). The script fails unless all 13 clips
+extract, because `main.m` addresses them by index.
 
 ## Private API
 
