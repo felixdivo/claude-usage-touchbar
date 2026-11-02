@@ -57,7 +57,7 @@ See [SECURITY.md](SECURITY.md) for exactly where the token goes.
 - macOS 12+ — developed and tested on macOS 26.4
 - Xcode Command Line Tools: `xcode-select --install`
 - Claude Code, signed in (`claude` in a terminal)
-- Node 22 or newer, **for the build only**: `brew install node`. It runs the
+- Node 22.13 or newer (it needs `node --permission`), **for the build only**: `brew install node`. It runs the
   pose data through its own engine once, at `make assets` time, sandboxed with
   `--permission` and `sandbox-exec` (see SECURITY.md), which older Node lacks. Neither the widget nor
   the usage script uses it afterwards — those need nothing beyond what the

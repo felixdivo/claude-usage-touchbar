@@ -168,6 +168,12 @@ def main():
         die("node is needed to evaluate the pose data — brew install node\n"
             "       (build-time only; the widget itself does not use it)")
 
+    # Without --permission the sandbox's first layer is missing: refuse rather
+    # than run the third-party code with one layer, or fail 13 times obscurely.
+    probe = subprocess.run([node, "--permission", "-e", "0"], capture_output=True)
+    if probe.returncode != 0:
+        die("this node does not support --permission (needs Node 22.13+) — brew upgrade node")
+
     print("Fetching pose grids from claudepix.vercel.app...")
     with tempfile.TemporaryDirectory() as tmp:
         ev = os.path.join(tmp, "ev.js")
